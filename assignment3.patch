@@ -1,0 +1,945 @@
+diff -Naur ./zephyr_old/include/task_model.h ./zephyr/include/task_model.h
+--- ./zephyr_old/include/task_model.h	1969-12-31 17:00:00.000000000 -0700
++++ ./zephyr/include/task_model.h	2021-03-31 15:00:01.294905000 -0700
+@@ -0,0 +1,30 @@
++
++#define NUM_MUTEXES 3
++#define NUM_THREADS	6
++#define TOTAL_TIME 2000  // total execution time in milliseconds
++
++struct Tasks
++{
++	char t_name[32]; 	// task name
++	int priority; 		// priority of the task
++	int period; 		// period for periodic task in miliseconds
++	int loop_iter[3]; 	// loop iterations for compute_1, compute_2 and compute_3
++	int mutex_m; 		// the mutex id to be locked and unlocked by the task
++};
++
++#define THREAD0 {"task 0", 2, 10, {100000, 100000, 100000}, 2}
++#define THREAD1 {"task 1", 3, 28, {100000, 100000, 100000}, 0}
++#define THREAD2 {"task 2", 4, 64, {100000, 100000, 100000}, 2}
++#define THREAD3 {"task 3", 5, 84, {100000, 100000, 100000}, 1}
++#define THREAD4 {"task 4", 6, 125, {100000, 100000, 100000}, 0}
++#define THREAD5 {"task 5", 7, 165, {100000, 100000, 100000}, 2}
++
++struct Tasks threads[NUM_THREADS]={THREAD0, THREAD1, THREAD2, THREAD3, THREAD4,THREAD5};
++
++/* define mutex for each operation */
++struct k_mutex mutex1;
++struct k_mutex mutex2;
++struct k_mutex mutex3;
++
++
++
+diff -Naur ./zephyr_old/include/tracing.h ./zephyr/include/tracing.h
+--- ./zephyr_old/include/tracing.h	2021-01-29 01:10:39.540885000 -0700
++++ ./zephyr/include/tracing.h	2021-03-31 21:41:54.819418249 -0700
+@@ -17,6 +17,7 @@
+ #define SYS_TRACE_ID_SEMA_INIT               (4u + SYS_TRACE_ID_OFFSET)
+ #define SYS_TRACE_ID_SEMA_GIVE               (5u + SYS_TRACE_ID_OFFSET)
+ #define SYS_TRACE_ID_SEMA_TAKE               (6u + SYS_TRACE_ID_OFFSET)
++#define SYS_TRACE_ID_THREADS_INIT            (7u + SYS_TRACE_ID_OFFSET)
+ 
+ #if CONFIG_TRACING
+ void z_sys_trace_idle(void);
+@@ -33,6 +34,11 @@
+ #elif defined CONFIG_TRACING_CPU_STATS
+ #include "tracing_cpu_stats.h"
+ 
++
++#elif defined CONFIG_TRACING_THREAD_EVENTS
++#include "./../subsys/debug/tracing/include/thread_events.h"
++
++
+ #elif defined CONFIG_TRACING_CTF
+ #include "tracing_ctf.h"
+ 
+@@ -121,6 +127,10 @@
+  */
+ #define sys_trace_end_call(id)
+ 
++#define sys_trace_mutex_lock();
++
++#define sys_trace_mutex_unlock();
++
+ 
+ #define z_sys_trace_idle()
+ 
+diff -Naur ./zephyr_old/samples/trace_app/CMakeLists.txt ./zephyr/samples/trace_app/CMakeLists.txt
+--- ./zephyr_old/samples/trace_app/CMakeLists.txt	1969-12-31 17:00:00.000000000 -0700
++++ ./zephyr/samples/trace_app/CMakeLists.txt	2021-03-31 20:32:05.881121000 -0700
+@@ -0,0 +1,9 @@
++set(IS_TEST 1)
++
++cmake_minimum_required(VERSION 3.13.1)
++include($ENV{ZEPHYR_BASE}/cmake/app/boilerplate.cmake NO_POLICY_SCOPE)
++project(trace_app)
++
++FILE(GLOB app_sources src/main.c)
++target_sources(app PRIVATE ${app_sources})
++target_compile_options(app PRIVATE -Wall)
+diff -Naur ./zephyr_old/samples/trace_app/main.py ./zephyr/samples/trace_app/main.py
+--- ./zephyr_old/samples/trace_app/main.py	1969-12-31 17:00:00.000000000 -0700
++++ ./zephyr/samples/trace_app/main.py	2021-03-31 21:16:49.246142000 -0700
+@@ -0,0 +1,96 @@
++# This is a sample Python script.
++import pandas as pd
++# Press Shift+F10 to execute it or replace it with your code.
++# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
++
++
++def print_hi(name):
++    # Use a breakpoint in the code line below to debug your script.
++    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
++
++
++# Press the green button in the gutter to run the script.
++if __name__ == '__main__':
++    #print_hi('PyCharm')
++
++    file1 = open('gtk.csv', 'r')
++    lines = file1.readlines()
++
++    ids = ["$", "%", "&", "'", "@", "^"]
++    thread_vs_val_time = {}
++    thread_vs_id ={}
++    all_thread_entries = []
++    count = 0
++    # Strips the newline character
++    for line in lines:
++        count += 1
++        if count <= 21 or not line.startswith("task"):
++            continue
++        # print("Line{}: {}".format(count, line.strip()))
++        stripped_line = line.strip()
++        parts = stripped_line.split(',')
++        all_thread_entries.append((parts[0], parts[1], parts[2]))
++        if parts[0] not in thread_vs_val_time:
++            thread_vs_val_time[parts[0]] = [(parts[1], parts[2])]
++        else:
++            thread_vs_val_time[parts[0]].append((parts[1], parts[2]))
++
++    ids_idx = 0
++    for t_id in thread_vs_val_time:
++        thread_vs_id[t_id] = ids[ids_idx]
++        ids_idx += 1
++
++    print(len(thread_vs_id))
++    # write to file
++    meta_data = """$date
++   March 28, 2021.
++$end
++$version
++   VCD generator tool version info text.
++$end
++$comment
++   Any comment text.
++$end
++$timescale 1ps $end
++$scope module logic $end
++$var wire 1 $ t1 $end
++$var wire 1 % t2 $end
++$var wire 1 & t3 $end
++$var wire 1 ' t4 $end
++$var wire 1 @ t5 $end
++$var wire 1 ^ t6 $end
++$upscope $end
++$enddefinitions $end
++$dumpvars
++0$
++0%
++0&
++0'
++0@
++0^
++$end
++#0
++0$
++0%
++0&
++0'
++0@
++0^
++"""
++    out_file = open('res.vcd', 'w')
++    out_file.writelines(meta_data)
++
++    i = 0
++    for entry in all_thread_entries:
++        # print("#" + entry[2])
++        # print(entry[1]+thread_vs_id[entry[0]])
++        out_file.write("#" + entry[2]+"\n")
++        if i == len(all_thread_entries)-1:
++            out_file.write(entry[1] + thread_vs_id[entry[0]])
++        else:
++            out_file.write(entry[1] + thread_vs_id[entry[0]] + "\n")
++        i += 1
++
++    out_file.close()
++
++# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+diff -Naur ./zephyr_old/samples/trace_app/prj.conf ./zephyr/samples/trace_app/prj.conf
+--- ./zephyr_old/samples/trace_app/prj.conf	1969-12-31 17:00:00.000000000 -0700
++++ ./zephyr/samples/trace_app/prj.conf	2021-03-31 18:53:24.865400000 -0700
+@@ -0,0 +1,13 @@
++CONFIG_PRINTK=y
++CONFIG_THREAD_MONITOR=y
++CONFIG_INIT_STACKS=y
++CONFIG_THREAD_NAME=y
++CONFIG_BOOT_BANNER=n
++CONFIG_LOG=y
++#CONFIG_OBJECT_TRACING=y
++CONFIG_TRACING_THREAD_EVENTS=y
++CONFIG_TRACING=y
++CONFIG_PRIORITY_CEILING=10
++CONFIG_THREAD_CUSTOM_DATA=y
++#CONFIG_THREAD_STACK_INFO=y
++#CONFIG_DEBUG=y
+diff -Naur ./zephyr_old/samples/trace_app/readme.txt ./zephyr/samples/trace_app/readme.txt
+--- ./zephyr_old/samples/trace_app/readme.txt	1969-12-31 17:00:00.000000000 -0700
++++ ./zephyr/samples/trace_app/readme.txt	2021-03-31 21:16:13.666095000 -0700
+@@ -0,0 +1,70 @@
++******************************************************************************
++**********************CSE522-Real Time Embedded Systems**********************
++*****************************Assignment-3***************************************
++
++
++Name - Raunak
++ASU ID - 1217240245
++
++Description : 
++
++In this assignment, we have developed a thread tracing backend function, which logs the thread data, stores in a buffer and dumps the value on the screen, which is used to make vcd file for the analysis through gtkwave.
++
++
++
++******************************************************************************
++*******************Steps to compile and execute the code*********************
++
++
++
++1. Copy the  RTES-Raunak_03.zip file in the zephyr/samples directory.
++
++2. Unzip the RTES-Raunak_03.zip in the zephyr/samples directory.
++
++3. apply the patch assignment3.patch to the zephyr source directory.
++
++4. start the terminal go to zephyr folder and set the environment by the following commands,
++
++	(i)   source zephyr-env.sh
++	(ii)  export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
++	(iii) export ZEPHYR_SDK_INSTALL_DIR=Zephyr SDK installation directory
++	
++5. Go to zephyr/samples/trace_app folder
++
++6. Create a folder named build using mkdir build command.
++
++7. Go inside the folder build using cd build command.
++
++8. Set the cmake environment using the following command,
++
++	cmake -DBOARD=galileo ..
++	
++9. Then type the following command to make the binary,
++
++	make
++	
++10. Now from the zephyr directory created inside build copy the zephyr.strip file to the kernel folder of SD card.
++
++11. Now, assuming you sd card is prepared with bootia32.efi file and config file. Insert your sd card to the galileo board.
++
++12. Now boot from SD card and load the zephyr kernel.
++
++13. Now connect the ftdi cable and do chmod 777 tty/USB0.
++
++14. start putty, set the logging to printable output and name the file as gtk.csv and set serial communication to 115200 and tty/USB0 and load.
++
++15. Load the zephyr kernel, after a delay all the data will be dumped and stored in the gtk.csv file.
++
++16. copy the gtk.csv file in the python(pycharm) project folder along with the python main file in the trace_app folder and execute the script to create the vcd file.
++
++17. open the vcd file through gtkwave to observe the waveform.
++	
++	
++*******************************************************************************
++******************************Sample Output**********************************
++
++
++
++Specified in the report.
++
++
+diff -Naur ./zephyr_old/samples/trace_app/src/main.c ./zephyr/samples/trace_app/src/main.c
+--- ./zephyr_old/samples/trace_app/src/main.c	1969-12-31 17:00:00.000000000 -0700
++++ ./zephyr/samples/trace_app/src/main.c	2021-03-31 20:00:16.629662000 -0700
+@@ -0,0 +1,293 @@
++/*
++ * Copyright (c) 2016 Open-RnD Sp. z o.o.
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++#include <zephyr.h>
++#include <device.h>
++#include <gpio.h>
++#include <misc/util.h>
++#include <misc/printk.h>
++#include <misc/__assert.h>
++#include <shell/shell.h>
++#include <shell/shell_uart.h>
++#include <version.h>
++#include <pinmux.h>
++#include "../boards/x86/galileo/board.h"
++#include <stdlib.h>
++#include <string.h>
++#include <task_model.h>
++#include <tracing.h>
++/* Define Debug to see the Dprint statement to debug */
++//#define DEBUG
++
++#if defined(DEBUG) 
++	#define DPRINTK(fmt, args...) printk("DEBUG: %s():%d: " fmt, \
++   		 __func__, __LINE__, ##args)
++#else
++ 	#define DPRINTK(fmt, args...) /* do nothing if not defined*/
++#endif
++
++
++/* stack size */
++#define STACK_SIZE 500
++
++struct k_mutex mut[NUM_MUTEXES];
++
++
++/* define stack size for each thread */
++K_THREAD_STACK_DEFINE(my_stack_area1, STACK_SIZE);
++K_THREAD_STACK_DEFINE(my_stack_area2, STACK_SIZE);
++K_THREAD_STACK_DEFINE(my_stack_area3, STACK_SIZE);
++K_THREAD_STACK_DEFINE(my_stack_area4, STACK_SIZE);
++K_THREAD_STACK_DEFINE(my_stack_area5, STACK_SIZE);
++K_THREAD_STACK_DEFINE(my_stack_area6, STACK_SIZE);
++
++
++/* thread declaration */
++void sampleThread(void*, void*, void*);
++
++struct k_thread my_thread_data1;             //struct kthread for thread1 defined
++struct k_thread my_thread_data2;             //struct kthread for thread2 defined
++struct k_thread my_thread_data3;             //struct kthread for thread3 defined
++struct k_thread my_thread_data4;             //struct kthread for thread4 defined
++struct k_thread my_thread_data5;             //struct kthread for thread5 defined
++struct k_thread my_thread_data6;             //struct kthread for thread6 defined
++
++/* Function for thread defined */
++void sampleThread(void *a, void *b, void *c){
++
++    volatile uint64_t n;                         //variable for storing iterations
++    struct k_thread *t = k_current_get();        //structure for current thread
++    /*Endless Loop */
++    while(1) {
++        /*compute 1*/
++        if(strcmp(t->name, "task 0") == 0) {
++            n = threads[0].loop_iter[0];
++            /*compute 1*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_lock(&mut[2], K_FOREVER);
++            n = threads[0].loop_iter[1];
++            /*compute 2*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_unlock(&mut[2]);
++            n = threads[0].loop_iter[2];
++            /*compute 3*/
++            while (n > 0) {
++                n--;
++            }
++            k_sleep(threads[0].period);
++            DPRINTK("Inside Thread1\n");
++        } else if (strcmp(t->name, "task 1") == 0){
++
++            n = threads[1].loop_iter[0];
++            /*compute 1*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_lock(&mut[0], K_FOREVER);
++            n = threads[1].loop_iter[1];
++            /*compute 2*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_unlock(&mut[0]);
++            n = threads[1].loop_iter[2];
++            /*compute 3*/
++            while (n > 0) {
++                n--;
++            }
++            k_sleep(threads[0].period);
++            DPRINTK("Inside Thread2\n");
++
++        } else if (strcmp(t->name, "task 2") == 0){
++
++            n = threads[2].loop_iter[0];
++            /*compute 1*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_lock(&mut[2], K_FOREVER);
++            n = threads[2].loop_iter[1];
++            /*compute 2*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_unlock(&mut[2]);
++            n = threads[2].loop_iter[2];
++            /*compute 3*/
++            while (n > 0) {
++                n--;
++            }
++            k_sleep(threads[2].period);
++            DPRINTK("Inside Thread3\n");
++
++        } else if (strcmp(t->name, "task 3") == 0){
++
++            n = threads[3].loop_iter[0];
++            /*compute 1*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_lock(&mut[1], K_FOREVER);
++            n = threads[3].loop_iter[1];
++            /*compute 2*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_unlock(&mut[1]);
++            n = threads[3].loop_iter[2];
++            /*compute 3*/
++            while (n > 0) {
++                n--;
++            }
++            k_sleep(threads[3].period);
++            DPRINTK("Inside Thread4\n");
++
++        } else if (strcmp(t->name, "task 4") == 0){
++
++            n = threads[4].loop_iter[0];
++            /*compute 1*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_lock(&mut[0], K_FOREVER);
++            n = threads[4].loop_iter[1];
++            /*compute 2*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_unlock(&mut[0]);
++            n = threads[4].loop_iter[2];
++            /*compute 3*/
++            while (n > 0) {
++                n--;
++            }
++            k_sleep(threads[4].period);
++            DPRINTK("Inside Thread5\n");
++
++        } else if (strcmp(t->name, "task 5") == 0) {
++
++            n = threads[5].loop_iter[0];
++            /*compute 1*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_lock(&mut[2], K_FOREVER);
++            n = threads[5].loop_iter[1];
++            /*compute 2*/
++            while (n > 0) {
++                n--;
++            }
++            k_mutex_unlock(&mut[2]);
++            n = threads[5].loop_iter[2];
++            /*compute 3*/
++            while (n > 0) {
++                n--;
++            }
++            k_sleep(threads[5].period);
++            DPRINTK("Inside Thread6\n");
++
++
++        }
++
++
++    }
++
++}
++
++
++
++/* Start of main function */
++void main(void)
++{
++
++    /*mutex array initialized */
++    mut[0] = mutex1;
++    mut[1] = mutex2;
++    mut[2] = mutex3;
++
++    /*mutexes initialized*/
++    k_mutex_init(&mutex1);
++    k_mutex_init(&mutex2);
++    k_mutex_init(&mutex3);
++
++    /*Tracing start*/
++    sys_trace_tracing_start();
++
++    /*Copy thread name to custom data when creating thread and start subsequent threads */
++    strcpy(my_thread_data1.custom_data, threads[0].t_name);
++    k_tid_t tid1 =  k_thread_create(&my_thread_data1, my_stack_area1,
++                                K_THREAD_STACK_SIZEOF(my_stack_area1),
++                                sampleThread, NULL, NULL, NULL,
++                                threads[0].priority, 0, K_NO_WAIT);
++
++    /*set the thread name for subsequent threads*/
++    k_thread_name_set(tid1, threads[0].t_name);
++    strcpy(my_thread_data2.custom_data, threads[1].t_name);
++    k_tid_t tid2 = k_thread_create(&my_thread_data2, my_stack_area2,
++                                  K_THREAD_STACK_SIZEOF(my_stack_area2),
++                                  sampleThread,
++                                  NULL, NULL, NULL,
++                                  threads[1].priority, 0, K_NO_WAIT);
++
++    k_thread_name_set(tid2, threads[1].t_name);
++
++    strcpy(my_thread_data3.custom_data, threads[2].t_name);
++    k_tid_t tid3 = k_thread_create(&my_thread_data3, my_stack_area3,
++                                  K_THREAD_STACK_SIZEOF(my_stack_area3),
++                                  sampleThread,
++                                  NULL, NULL, NULL,
++                                  threads[2].priority, 0, K_NO_WAIT);
++
++    k_thread_name_set(tid3, threads[2].t_name);
++    strcpy(my_thread_data4.custom_data, threads[3].t_name);
++    k_tid_t tid4 = k_thread_create(&my_thread_data4, my_stack_area4,
++                                  K_THREAD_STACK_SIZEOF(my_stack_area4),
++                                  sampleThread,
++                                  NULL, NULL, NULL,
++                                  threads[3].priority, 0, K_NO_WAIT);
++
++    k_thread_name_set(tid4, threads[3].t_name);
++    strcpy(my_thread_data5.custom_data, threads[4].t_name);
++    k_tid_t tid5 = k_thread_create(&my_thread_data5, my_stack_area5,
++                                  K_THREAD_STACK_SIZEOF(my_stack_area5),
++                                  sampleThread,
++                                  NULL, NULL, NULL,
++                                  threads[4].priority, 0, K_NO_WAIT);
++
++    k_thread_name_set(tid5, threads[4].t_name);
++
++    strcpy(my_thread_data6.custom_data, threads[5].t_name);
++    k_tid_t tid6 = k_thread_create(&my_thread_data6, my_stack_area6,
++                                  K_THREAD_STACK_SIZEOF(my_stack_area6),
++                                  sampleThread,
++                                  NULL, NULL, NULL,
++                                  threads[5].priority, 0, K_NO_WAIT);
++
++    k_thread_name_set(tid6, threads[5].t_name);
++
++    /*wait for specified time*/
++    k_sleep(TOTAL_TIME);
++    DPRINTK("Inside Main\n");
++    /*stop the tracing*/
++    sys_trace_tracing_end();
++
++    /*Kill the threads*/
++    k_thread_abort(tid1);
++    k_thread_abort(tid2);
++    k_thread_abort(tid3);
++    k_thread_abort(tid4);
++    k_thread_abort(tid5);
++    k_thread_abort(tid6);
++
++    /*dump the tracing values*/
++    sys_trace_tracing_dump();
++
++
++}
+diff -Naur ./zephyr_old/subsys/debug/Kconfig ./zephyr/subsys/debug/Kconfig
+--- ./zephyr_old/subsys/debug/Kconfig	2021-03-31 21:26:22.351821000 -0700
++++ ./zephyr/subsys/debug/Kconfig	2021-03-28 00:45:22.882507000 -0700
+@@ -241,6 +241,11 @@
+ 	  and exits (only distinguishes between idle thread, non idle thread
+ 	  and scheduler). Use provided API or enable automatic logging to
+ 	  get values.
++	  
++config TRACING_THREAD_EVENTS
++	bool "Enable thread events tracing"
++	help
++	  Module helps in tracing threads activity.
+ 
+ config TRACING_CPU_STATS_LOG
+ 	bool "Enable current CPU usage logging"
+diff -Naur ./zephyr_old/subsys/debug/tracing/CMakeLists.txt ./zephyr/subsys/debug/tracing/CMakeLists.txt
+--- ./zephyr_old/subsys/debug/tracing/CMakeLists.txt	2021-03-31 21:26:41.356055000 -0700
++++ ./zephyr/subsys/debug/tracing/CMakeLists.txt	2021-03-27 23:52:58.427830000 -0700
+@@ -12,5 +12,10 @@
+   CONFIG_TRACING_CPU_STATS
+   cpu_stats.c
+   )
++  
++zephyr_sources_ifdef(
++  CONFIG_TRACING_THREAD_EVENTS
++  thread_events.c
++  )
+ 
+ add_subdirectory_ifdef(CONFIG_TRACING_CTF ctf)
+diff -Naur ./zephyr_old/subsys/debug/tracing/include/thread_events.h ./zephyr/subsys/debug/tracing/include/thread_events.h
+--- ./zephyr_old/subsys/debug/tracing/include/thread_events.h	1969-12-31 17:00:00.000000000 -0700
++++ ./zephyr/subsys/debug/tracing/include/thread_events.h	2021-03-31 20:12:22.819119000 -0700
+@@ -0,0 +1,48 @@
++#ifndef _TRACE_THREAD_EVENTS_H
++#define _TRACE_THREAD_EVENTS_H
++#include <kernel.h>
++#include <kernel_structs.h>
++#include <init.h>
++
++#define bSize 1000
++
++//structure for buffer
++struct trace {
++	
++	char threadid[32];   //name of thread
++	u32_t count;         //value for vcd file
++	u32_t time;	      //timestamp
++
++};
++
++//functions for thread analysis defined
++void sys_trace_thread_switched_in(void);
++void sys_trace_thread_switched_out(void);
++void sys_trace_isr_enter(void);
++void sys_trace_isr_exit(void);
++void sys_trace_idle(void);
++void sys_trace_void(unsigned int id);
++void sys_trace_end_call(unsigned int id);
++void sys_trace_isr_exit_to_scheduler(void);
++
++void sys_trace_tracing_dump(void);
++void sys_trace_tracing_start(void);
++void sys_trace_tracing_end(void);
++
++void sys_trace_thread_create(struct k_thread *thread);
++void sys_trace_thread_pend(struct k_thread *thread);
++void sys_trace_thread_ready(struct k_thread *thread);
++
++void sys_trace_mutex_lock(void);
++void sys_trace_mutex_unlock(void);
++
++
++
++#define sys_trace_thread_priority_set(thread)
++#define sys_trace_thread_info(thread)
++#define sys_trace_thread_abort(thread)
++#define sys_trace_thread_suspend(thread)
++#define sys_trace_thread_resume(thread)
++
++
++#endif
+diff -Naur ./zephyr_old/subsys/debug/tracing/thread_events.c ./zephyr/subsys/debug/tracing/thread_events.c
+--- ./zephyr_old/subsys/debug/tracing/thread_events.c	1969-12-31 17:00:00.000000000 -0700
++++ ./zephyr/subsys/debug/tracing/thread_events.c	2021-03-31 20:19:41.510411000 -0700
+@@ -0,0 +1,291 @@
++
++#include "./include/thread_events.h"
++#include <misc/printk.h>
++#include <zephyr.h>
++#include <kernel_structs.h>
++#include <init.h>
++
++
++int indexBuffer=0;                    //index to track buffer
++struct trace tbuffer[bSize];          //initialization of buffer
++
++
++/*function for logging thread switched in*/
++void sys_trace_thread_switched_in(void)
++{
++	//take irq lock
++	int key = irq_lock();
++	
++	__ASSERT_NO_MSG(nested_interrupts == 0);
++	//get the current thread
++	struct k_thread *t = k_current_get();
++	//store only the threads data
++	if(indexBuffer<bSize && (strcmp(t->name, "task 0") == 0 || strcmp(t->name, "task 1") == 0 || strcmp(t->name, "task 2") == 0 || strcmp(t->name, "task 3") == 0 || strcmp(t->name, "task 4") == 0 || strcmp(t->name, "task 5") == 0)){
++	
++	//store the data in buffer
++	strcpy(tbuffer[indexBuffer].threadid, t->name);
++	tbuffer[indexBuffer].count = 1;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	}
++	
++	//release irq lock
++	irq_unlock(key);
++}
++
++/*function for logging thread switched out*/
++void sys_trace_thread_switched_out(void)
++{
++	int key = irq_lock();
++	
++	__ASSERT_NO_MSG(nested_interrupts == 0);
++	__ASSERT_NO_MSG(current_thread == k_current_get());
++	struct k_thread *t = k_current_get();
++	if(indexBuffer<bSize && (strcmp(t->name, "task 0") == 0 || strcmp(t->name, "task 1") == 0 || strcmp(t->name, "task 2") == 0 || strcmp(t->name, "task 3") == 0 || strcmp(t->name, "task 4") == 0 || strcmp(t->name, "task 5") == 0)){
++
++	
++	strcpy(tbuffer[indexBuffer].threadid, t->name);
++	tbuffer[indexBuffer].count = 0;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	}
++
++	irq_unlock(key);
++}
++
++/*function for logging thread creation*/
++void sys_trace_thread_create(struct k_thread *thread)
++{
++
++	int key = irq_lock();
++	
++	__ASSERT_NO_MSG(nested_interrupts == 0);
++	
++	if(indexBuffer<bSize && (strcmp((char*)thread->custom_data, "task 0") == 0 || strcmp((char*)thread->custom_data, "task 1") == 0 || strcmp((char*)thread->custom_data, "task 2") == 0 || strcmp((char*)thread->custom_data, "task 3") == 0 || strcmp((char*)thread->custom_data, "task 4") == 0 || strcmp((char*)thread->custom_data, "task 5") == 0)){
++
++	
++	strcpy(tbuffer[indexBuffer].threadid, (char*)thread->custom_data);
++	tbuffer[indexBuffer].count = 1;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	}
++	if(indexBuffer<bSize && (strcmp((char*)thread->custom_data, "task 0") == 0 || strcmp((char*)thread->custom_data, "task 1") == 0 || strcmp((char*)thread->custom_data, "task 2") == 0 || strcmp((char*)thread->custom_data, "task 3") == 0 || strcmp((char*)thread->custom_data, "task 4") == 0 || strcmp((char*)thread->custom_data, "task 5") == 0)){
++	
++	
++	strcpy(tbuffer[indexBuffer].threadid, (char*)thread->custom_data);
++	tbuffer[indexBuffer].count = 0;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	
++	}
++	irq_unlock(key);
++
++}
++
++/*function for logging thread pending status*/
++void sys_trace_thread_pend(struct k_thread *thread)
++{
++
++	int key = irq_lock();
++	
++	__ASSERT_NO_MSG(nested_interrupts == 0);
++	
++	if(indexBuffer<bSize && (strcmp(thread->name, "task 0") == 0 || strcmp(thread->name, "task 1") == 0 || strcmp(thread->name, "task 2") == 0 || strcmp(thread->name, "task 3") == 0 || strcmp(thread->name, "task 4") == 0 || strcmp(thread->name, "task 5") == 0)){
++
++	
++	strcpy(tbuffer[indexBuffer].threadid, thread->name);
++	tbuffer[indexBuffer].count = 1;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	}
++	
++	if(indexBuffer<bSize && (strcmp(thread->name, "task 0") == 0 || strcmp(thread->name, "task 1") == 0 || strcmp(thread->name, "task 2") == 0 || strcmp(thread->name, "task 3") == 0 || strcmp(thread->name, "task 4") == 0 || strcmp(thread->name, "task 5") == 0)){
++	
++	
++	strcpy(tbuffer[indexBuffer].threadid, thread->name);
++	tbuffer[indexBuffer].count = 0;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	
++	}
++	irq_unlock(key);
++
++}
++
++/*function for logging thread ready status*/
++void sys_trace_thread_ready(struct k_thread *thread)
++{
++
++	int key = irq_lock();
++	
++	__ASSERT_NO_MSG(nested_interrupts == 0);
++	
++	if(indexBuffer<bSize && (strcmp(thread->name, "task 0") == 0 || strcmp(thread->name, "task 1") == 0 || strcmp(thread->name, "task 2") == 0 || strcmp(thread->name, "task 3") == 0 || strcmp(thread->name, "task 4") == 0 || strcmp(thread->name, "task 5") == 0)){
++
++	
++	strcpy(tbuffer[indexBuffer].threadid, thread->name);
++	tbuffer[indexBuffer].count = 1;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	}
++	
++	if(indexBuffer<bSize && (strcmp(thread->name, "task 0") == 0 || strcmp(thread->name, "task 1") == 0 || strcmp(thread->name, "task 2") == 0 || strcmp(thread->name, "task 3") == 0 || strcmp(thread->name, "task 4") == 0 || strcmp(thread->name, "task 5") == 0)){
++	
++	
++	strcpy(tbuffer[indexBuffer].threadid, thread->name);
++	tbuffer[indexBuffer].count = 0;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	
++	}
++	irq_unlock(key);
++
++}
++
++/*function for logging thread mutex lock*/
++void sys_trace_mutex_lock(void){
++
++	int key = irq_lock();
++
++	struct k_thread *t = k_current_get();
++	if(indexBuffer<bSize && strcmp(t->name, "task 0") == 0 && strcmp(t->name, "task 1") == 0 && strcmp(t->name, "task 2") == 0 && strcmp(t->name, "task 3") == 0 && strcmp(t->name, "task 4") == 0 && strcmp(t->name, "task 5") == 0){
++	
++
++	
++	strcpy(tbuffer[indexBuffer].threadid, t->name);
++	tbuffer[indexBuffer].count = 0;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	}
++	
++	if(indexBuffer<bSize && (strcmp(t->name, "task 0") == 0 || strcmp(t->name, "task 1") == 0 || strcmp(t->name, "task 2") == 0 || strcmp(t->name, "task 3") == 0 || strcmp(t->name, "task 4") == 0 || strcmp(t->name, "task 5") == 0)){
++	
++	
++	strcpy(tbuffer[indexBuffer].threadid, t->name);
++	tbuffer[indexBuffer].count = 1;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	
++	}
++	
++	irq_unlock(key);
++
++}
++
++/*function for logging thread mutex unlock*/
++void sys_trace_mutex_unlock(void){
++
++	int key = irq_lock();
++
++	struct k_thread *t = k_current_get();
++	if(indexBuffer<bSize && (strcmp(t->name, "task 0") == 0 || strcmp(t->name, "task 1") == 0 || strcmp(t->name, "task 2") == 0 || strcmp(t->name, "task 3") == 0 || strcmp(t->name, "task 4") == 0 || strcmp(t->name, "task 5") == 0)){
++	
++	
++	strcpy(tbuffer[indexBuffer].threadid, t->name);
++	tbuffer[indexBuffer].count = 0;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	}
++	
++	if(indexBuffer<bSize && (strcmp(t->name, "task 0") == 0 || strcmp(t->name, "task 1") == 0 || strcmp(t->name, "task 2") == 0 || strcmp(t->name, "task 3") == 0 || strcmp(t->name, "task 4") == 0 || strcmp(t->name, "task 5") == 0)){
++	
++	
++	strcpy(tbuffer[indexBuffer].threadid, t->name);
++	tbuffer[indexBuffer].count = 1;
++	tbuffer[indexBuffer].time = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32());
++	indexBuffer++;
++	
++	}
++	
++	irq_unlock(key);
++
++}
++
++
++void sys_trace_void(unsigned int id){
++
++}
++
++void sys_trace_end_call(unsigned int id){
++
++}
++
++/*function for logging thread tracing start*/
++void sys_trace_tracing_start(void){
++
++	
++	sys_trace_void(SYS_TRACE_ID_THREADS_INIT);
++
++}
++
++/*function for logging thread tracing end*/
++void sys_trace_tracing_end(void){
++
++
++	sys_trace_end_call(SYS_TRACE_ID_THREADS_INIT);
++
++}
++
++/*function for dumping buffer values*/
++void sys_trace_tracing_dump(void){
++
++	for(int i=0; i<bSize; i++){
++	
++		printk("%s,%d,%d\n",tbuffer[i].threadid, tbuffer[i].count, tbuffer[i].time);
++	
++	}
++
++}
++
++void sys_trace_idle(void)
++{
++}
++
++void sys_trace_isr_enter(void)
++{
++	
++
++}
++
++void sys_trace_isr_exit(void)
++{
++	
++
++}
++
++void sys_trace_isr_exit_to_scheduler(void)
++{
++}
++
++void z_sys_trace_isr_exit_to_scheduler(void){
++	sys_trace_isr_exit_to_scheduler();
++}
++
++void z_sys_trace_idle(void)
++{
++	sys_trace_idle();
++}
++
++void z_sys_trace_isr_enter(void)
++{
++	sys_trace_isr_enter();
++}
++
++void z_sys_trace_isr_exit(void)
++{
++	sys_trace_isr_exit();
++}
++
++/*internal kernel function for logging thread switched in*/
++void z_sys_trace_thread_switched_in(void)
++{
++	sys_trace_thread_switched_in();
++}
++
++/*internal kernel function for logging thread switched out*/
++void z_sys_trace_thread_switched_out(void)
++{
++	sys_trace_thread_switched_out();
++}
++
++
